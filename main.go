@@ -1,14 +1,17 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
+// Handling errors remotely
+// Should be some slack notifiaction to tell when something fatal came up
 func handleError(err error) {
 	log.Fatal(err)
 }
@@ -16,43 +19,42 @@ func handleError(err error) {
 func main() {
 	slackToken := os.Getenv("SLACK_TOKEN")
 
-	users, err := checkUsersPresence(slackToken)
+	// Connecting to SQLite DB, if not exists - creating
+	db, err := sql.Open("sqlite3", "./users.db")
 	if err != nil {
-		handleError(err)
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Initiating users table if not exists
+	dbInitiate := `
+	CREATE TABLE IF NOT EXISTS users (id text not null, timestamp bigint not null);`
+	_, err = db.Exec(dbInitiate)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	fmt.Println(users)
+	go func() {
+		for {
+			users, err := checkUsersPresence(slackToken)
+			if err != nil {
+				handleError(err)
+			}
 
-}
+			err = writeToDB(db, users)
+			if err != nil {
+				handleError(err)
+			}
+			time.Sleep(10 * time.Minute)
+		}
+	}()
 
-type userRawData struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Presence string `json:"presence"`
-}
-
-type usersRawResponse struct {
-	Members []userRawData `json:"members"`
-}
-
-func checkUsersPresence(token string) ([]userRawData, error) {
-	slackUserListURL := "https://slack.com/api/users.list?presence=true&token=" + token
-	res, err := http.Get(slackUserListURL)
-	if err != nil {
-		return nil, fmt.Errorf("error while doing http request: %v", err)
+	handler := httpHandler{
+		DB:    db,
+		Token: slackToken,
 	}
-
-	users, err := ioutil.ReadAll(res.Body)
-	res.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("error while reading http response: %v", err)
-	}
-
-	var usersData usersRawResponse
-	err = json.Unmarshal(users, &usersData)
-	if err != nil {
-		return nil, fmt.Errorf("error while unmarshaling http response: %v", err)
-	}
-
-	return usersData.Members, nil
+	addr := ":" + os.Getenv("PORT")
+	http.HandleFunc("/help", handler.help)
+	http.HandleFunc("/total", handler.total)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
