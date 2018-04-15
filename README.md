@@ -24,3 +24,9 @@ Download code, compile and as noted above.
 
 ### Note:
 It will give list of all users, sorted by their presence, descending.
+
+## TODO
+- Pretify responses
+- Error reporting
+- Tests
+- Auto-revive
